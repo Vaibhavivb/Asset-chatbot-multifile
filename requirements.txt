@@ -1,0 +1,7 @@
+streamlit
+cohere
+pdfplumber
+pandas
+openpyxl
+rapidfuzz
+numpy
