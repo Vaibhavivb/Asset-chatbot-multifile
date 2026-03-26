@@ -38,21 +38,15 @@ def extract_pdf(file):
             text += page.extract_text() or ""
     return text
 
-# ================= SYNTHETIC ID =================
+# ================= ID =================
 def generate_asset_id(data):
     key = f"{data.get('asset_name','')}_{data.get('location','')}"
     return hashlib.md5(key.encode()).hexdigest()
 
-# ================= MULTI-ASSET EXTRACTION =================
+# ================= EXTRACT =================
 def extract_data(text):
     prompt = f"""
 Extract ALL assets from the document.
-
-IMPORTANT:
-- There may be multiple assets
-- Each asset must be separate
-- Do NOT merge assets
-- If only one asset exists → return list with 1 item
 
 Return STRICT JSON ARRAY:
 
@@ -90,7 +84,6 @@ Text:
             data["asset_id"] = generate_asset_id(data)
 
         return data_list
-
     except:
         return []
 
@@ -103,8 +96,7 @@ def search_metadata(df, query):
         score = 0
 
         for col in df.columns:
-            val = str(row[col])
-            if query in val:
+            if query in str(row[col]):
                 score += 2
 
         score += fuzz.partial_ratio(query, row.get("asset_name", "")) / 50
@@ -117,53 +109,75 @@ def search_metadata(df, query):
 
 # ================= DEDUP =================
 def add_unique_asset(data):
-    existing_ids = [d["asset_id"] for d in st.session_state.metadata_store]
-
-    if data["asset_id"] not in existing_ids:
+    ids = [d["asset_id"] for d in st.session_state.metadata_store]
+    if data["asset_id"] not in ids:
         st.session_state.metadata_store.append(data)
 
-# ================= UI =================
+# ================= UPLOAD =================
+st.title("🤖 Asset Intelligence Platform")
+
+uploaded_files = st.file_uploader(
+    "Upload Asset PDFs",
+    type=["pdf"],
+    accept_multiple_files=True
+)
+
+# ================= PROCESS =================
+if uploaded_files:
+    st.session_state.metadata_store = []
+
+    for file in uploaded_files:
+        try:
+            text = extract_pdf(file)
+            data_list = extract_data(text)
+
+            for data in data_list:
+                add_unique_asset(data)
+
+        except:
+            st.warning(f"⚠️ Failed: {file.name}")
+
+    st.success(f"✅ Processed {len(uploaded_files)} files")
+
+# ================= DATA =================
+df = pd.DataFrame(st.session_state.metadata_store)
+
 # ================= TABS =================
 tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📂 Data", "💬 Chat"])
 
 # ================= DASHBOARD =================
 with tab1:
     if not df.empty:
-        st.subheader("📊 Overview")
-
         col1, col2, col3 = st.columns(3)
 
         col1.metric("Total Assets", len(df))
         col2.metric("High Risk", len(df[df["risk_level"].str.contains("high", na=False)]))
         col3.metric("Locations", df["location"].nunique())
 
-        st.subheader("📊 Risk Distribution")
+        st.subheader("Risk Distribution")
         st.bar_chart(df["risk_level"].value_counts())
 
-        st.subheader("📍 Assets by Location")
+        st.subheader("Assets by Location")
         st.bar_chart(df["location"].value_counts())
-
     else:
         st.info("Upload PDFs to see dashboard")
 
 # ================= DATA =================
 with tab2:
     if not df.empty:
-        st.subheader("📂 Asset Data")
-
         st.dataframe(df, use_container_width=True)
 
         col1, col2 = st.columns(2)
 
         with col1:
             risk_filter = st.selectbox(
-                "Filter by Risk",
+                "Risk",
                 ["All"] + list(df["risk_level"].dropna().unique())
             )
 
         with col2:
             location_filter = st.selectbox(
-                "Filter by Location",
+                "Location",
                 ["All"] + list(df["location"].dropna().unique())
             )
 
@@ -175,24 +189,18 @@ with tab2:
         if location_filter != "All":
             filtered_df = filtered_df[filtered_df["location"] == location_filter]
 
-        st.write("### 🔍 Filtered Results")
+        st.subheader("Filtered Results")
         st.dataframe(filtered_df, use_container_width=True)
 
+        st.subheader("High Risk Assets")
+        st.dataframe(df[df["risk_level"].str.contains("high", na=False)])
     else:
-        st.info("Upload PDFs first")
+        st.info("No data available")
 
 # ================= CHAT =================
 with tab3:
-    st.subheader("💬 Ask Questions About Assets")
+    st.subheader("💬 Chat")
 
-    st.markdown("""
-    Try asking:
-    - Which asset is high risk?
-    - Compare all assets
-    - Show assets in Bangalore
-    """)
-
-    # chat history display
     for msg in st.session_state.chat_history:
         with st.chat_message("user" if msg["role"] == "USER" else "assistant"):
             st.write(msg["message"])
@@ -203,7 +211,7 @@ with tab3:
         with st.chat_message("user"):
             st.write(user_input)
 
-        if len(df) > 0:
+        if not df.empty:
             results = search_metadata(df, user_input)
 
             if results:
@@ -212,7 +220,7 @@ with tab3:
                 context = df.to_string()
 
                 prompt = f"""
-You are an intelligent asset assistant.
+You are an asset assistant.
 
 Dataset:
 {context[:4000]}
@@ -231,126 +239,7 @@ Question:
             {"role": "CHATBOT", "message": str(bot_reply)}
         )
 
+        st.session_state.chat_history = st.session_state.chat_history[-10:]
+
         with st.chat_message("assistant"):
             st.write(bot_reply)
-
-# ================= PROCESS FILES =================
-if uploaded_files:
-    st.session_state.metadata_store = []
-
-    for file in uploaded_files:
-        try:
-            text = extract_pdf(file)
-            data_list = extract_data(text)
-
-            for data in data_list:
-                if data:
-                    add_unique_asset(data)
-
-        except:
-            st.warning(f"⚠️ Failed to process {file.name}")
-
-    st.success(f"✅ Processed {len(uploaded_files)} files")
-
-# ================= DATAFRAME =================
-df = pd.DataFrame(st.session_state.metadata_store)
-
-# ================= SHOW TABLE =================
-if not df.empty:
-    st.subheader("📊 Asset Comparison Table")
-    st.dataframe(df)
-    # ================= FILTERS =================
-    col1, col2 = st.columns(2)
-
-    with col1:
-        risk_filter = st.selectbox(
-            "Filter by Risk",
-            ["All"] + list(df["risk_level"].dropna().unique())
-        )
-
-    with col2:
-        location_filter = st.selectbox(
-            "Filter by Location",
-            ["All"] + list(df["location"].dropna().unique())
-        )
-
-    filtered_df = df.copy()
-
-    if risk_filter != "All":
-        filtered_df = filtered_df[filtered_df["risk_level"] == risk_filter]
-
-    if location_filter != "All":
-        filtered_df = filtered_df[filtered_df["location"] == location_filter]
-
-    st.write("### 🔍 Filtered Results")
-    st.dataframe(filtered_df)
-
-    # ================= HIGH RISK =================
-    st.write("### ⚠️ High Risk Assets")
-    high_risk = df[df["risk_level"].str.contains("high", na=False)]
-
-    if not high_risk.empty:
-        st.dataframe(high_risk)
-    else:
-        st.write("No high risk assets found")
-# ================= CHAT HISTORY DISPLAY =================
-for msg in st.session_state.chat_history:
-    with st.chat_message("user" if msg["role"] == "USER" else "assistant"):
-        st.write(msg["message"])
-
-# ================= CHAT =================
-user_input = st.chat_input("Ask about assets...")
-
-if user_input:
-
-    # Show user message
-    with st.chat_message("user"):
-        st.write(user_input)
-
-    if len(df) > 0:
-
-        results = search_metadata(df, user_input)
-
-        if results:
-            bot_reply = results
-
-        else:
-            context = df.to_string() if not df.empty else "No data"
-
-            prompt = f"""
-You are an intelligent asset assistant.
-
-IMPORTANT:
-- Maintain conversation context
-- Use previous questions if relevant
-- Do NOT assume duplicates
-- Only refer to dataset
-- Answer clearly
-
-Dataset:
-{context[:4000]}
-
-User Question:
-{user_input}
-"""
-
-            bot_reply = call_llm(prompt)
-
-    else:
-        bot_reply = "⚠️ No data available. Upload PDFs first."
-
-    # ================= SAVE CHAT =================
-    st.session_state.chat_history.append(
-        {"role": "USER", "message": user_input}
-    )
-
-    st.session_state.chat_history.append(
-        {"role": "CHATBOT", "message": str(bot_reply)}
-    )
-
-    # Limit memory (avoid token overflow)
-    st.session_state.chat_history = st.session_state.chat_history[-10:]
-
-    # Show bot response
-    with st.chat_message("assistant"):
-        st.write(bot_reply)
