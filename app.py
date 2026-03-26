@@ -156,7 +156,40 @@ df = pd.DataFrame(st.session_state.metadata_store)
 if not df.empty:
     st.subheader("📊 Asset Comparison Table")
     st.dataframe(df)
+    # ================= FILTERS =================
+    col1, col2 = st.columns(2)
 
+    with col1:
+        risk_filter = st.selectbox(
+            "Filter by Risk",
+            ["All"] + list(df["risk_level"].dropna().unique())
+        )
+
+    with col2:
+        location_filter = st.selectbox(
+            "Filter by Location",
+            ["All"] + list(df["location"].dropna().unique())
+        )
+
+    filtered_df = df.copy()
+
+    if risk_filter != "All":
+        filtered_df = filtered_df[filtered_df["risk_level"] == risk_filter]
+
+    if location_filter != "All":
+        filtered_df = filtered_df[filtered_df["location"] == location_filter]
+
+    st.write("### 🔍 Filtered Results")
+    st.dataframe(filtered_df)
+
+    # ================= HIGH RISK =================
+    st.write("### ⚠️ High Risk Assets")
+    high_risk = df[df["risk_level"].str.contains("high", na=False)]
+
+    if not high_risk.empty:
+        st.dataframe(high_risk)
+    else:
+        st.write("No high risk assets found")
 # ================= CHAT HISTORY DISPLAY =================
 for msg in st.session_state.chat_history:
     with st.chat_message("user" if msg["role"] == "USER" else "assistant"):
