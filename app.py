@@ -123,13 +123,116 @@ def add_unique_asset(data):
         st.session_state.metadata_store.append(data)
 
 # ================= UI =================
-st.title("🤖 Asset Intelligence Chatbot")
+# ================= TABS =================
+tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📂 Data", "💬 Chat"])
 
-uploaded_files = st.file_uploader(
-    "Upload Asset PDFs",
-    type=["pdf"],
-    accept_multiple_files=True
-)
+# ================= DASHBOARD =================
+with tab1:
+    if not df.empty:
+        st.subheader("📊 Overview")
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric("Total Assets", len(df))
+        col2.metric("High Risk", len(df[df["risk_level"].str.contains("high", na=False)]))
+        col3.metric("Locations", df["location"].nunique())
+
+        st.subheader("📊 Risk Distribution")
+        st.bar_chart(df["risk_level"].value_counts())
+
+        st.subheader("📍 Assets by Location")
+        st.bar_chart(df["location"].value_counts())
+
+    else:
+        st.info("Upload PDFs to see dashboard")
+
+# ================= DATA =================
+with tab2:
+    if not df.empty:
+        st.subheader("📂 Asset Data")
+
+        st.dataframe(df, use_container_width=True)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            risk_filter = st.selectbox(
+                "Filter by Risk",
+                ["All"] + list(df["risk_level"].dropna().unique())
+            )
+
+        with col2:
+            location_filter = st.selectbox(
+                "Filter by Location",
+                ["All"] + list(df["location"].dropna().unique())
+            )
+
+        filtered_df = df.copy()
+
+        if risk_filter != "All":
+            filtered_df = filtered_df[filtered_df["risk_level"] == risk_filter]
+
+        if location_filter != "All":
+            filtered_df = filtered_df[filtered_df["location"] == location_filter]
+
+        st.write("### 🔍 Filtered Results")
+        st.dataframe(filtered_df, use_container_width=True)
+
+    else:
+        st.info("Upload PDFs first")
+
+# ================= CHAT =================
+with tab3:
+    st.subheader("💬 Ask Questions About Assets")
+
+    st.markdown("""
+    Try asking:
+    - Which asset is high risk?
+    - Compare all assets
+    - Show assets in Bangalore
+    """)
+
+    # chat history display
+    for msg in st.session_state.chat_history:
+        with st.chat_message("user" if msg["role"] == "USER" else "assistant"):
+            st.write(msg["message"])
+
+    user_input = st.chat_input("Ask about assets...")
+
+    if user_input:
+        with st.chat_message("user"):
+            st.write(user_input)
+
+        if len(df) > 0:
+            results = search_metadata(df, user_input)
+
+            if results:
+                bot_reply = pd.DataFrame(results)
+            else:
+                context = df.to_string()
+
+                prompt = f"""
+You are an intelligent asset assistant.
+
+Dataset:
+{context[:4000]}
+
+Question:
+{user_input}
+"""
+                bot_reply = call_llm(prompt)
+        else:
+            bot_reply = "Upload PDFs first"
+
+        st.session_state.chat_history.append(
+            {"role": "USER", "message": user_input}
+        )
+        st.session_state.chat_history.append(
+            {"role": "CHATBOT", "message": str(bot_reply)}
+        )
+
+        with st.chat_message("assistant"):
+            st.write(bot_reply)
 
 # ================= PROCESS FILES =================
 if uploaded_files:
