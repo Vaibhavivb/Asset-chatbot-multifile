@@ -14,11 +14,19 @@ if "COHERE_API_KEY" not in st.secrets:
 
 co = cohere.Client(st.secrets["COHERE_API_KEY"])
 
+# ================= SESSION =================
+if "metadata_store" not in st.session_state:
+    st.session_state.metadata_store = []
+
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
 # ================= LLM =================
 def call_llm(prompt):
     response = co.chat(
         model="command-a-03-2025",
-        message=prompt
+        message=prompt,
+        chat_history=st.session_state.chat_history
     )
     return response.text
 
@@ -64,7 +72,7 @@ Text:
 {text[:4000]}
 """
 
-    response = call_llm(prompt)
+    response = co.chat(model="command-a-03-2025", message=prompt).text
     response = response.replace("```json", "").replace("```", "").strip()
 
     match = re.search(r"\[.*\]", response, re.DOTALL)
@@ -114,10 +122,6 @@ def add_unique_asset(data):
     if data["asset_id"] not in existing_ids:
         st.session_state.metadata_store.append(data)
 
-# ================= INIT =================
-if "metadata_store" not in st.session_state:
-    st.session_state.metadata_store = []
-
 # ================= UI =================
 st.title("🤖 Asset Intelligence Chatbot")
 
@@ -153,46 +157,17 @@ if not df.empty:
     st.subheader("📊 Asset Comparison Table")
     st.dataframe(df)
 
-    # 🔥 Filters
-    col1, col2 = st.columns(2)
-
-    with col1:
-        risk_filter = st.selectbox(
-            "Filter by Risk",
-            ["All"] + list(df["risk_level"].dropna().unique())
-        )
-
-    with col2:
-        location_filter = st.selectbox(
-            "Filter by Location",
-            ["All"] + list(df["location"].dropna().unique())
-        )
-
-    filtered_df = df.copy()
-
-    if risk_filter != "All":
-        filtered_df = filtered_df[filtered_df["risk_level"] == risk_filter]
-
-    if location_filter != "All":
-        filtered_df = filtered_df[filtered_df["location"] == location_filter]
-
-    st.write("### 🔍 Filtered Results")
-    st.dataframe(filtered_df)
-
-    # 🔥 Highlight high risk
-    st.write("### ⚠️ High Risk Assets")
-    high_risk = df[df["risk_level"].str.contains("high", na=False)]
-
-    if not high_risk.empty:
-        st.dataframe(high_risk)
-    else:
-        st.write("No high risk assets found")
+# ================= CHAT HISTORY DISPLAY =================
+for msg in st.session_state.chat_history:
+    with st.chat_message("user" if msg["role"] == "USER" else "assistant"):
+        st.write(msg["message"])
 
 # ================= CHAT =================
 user_input = st.chat_input("Ask about assets...")
 
 if user_input:
 
+    # Show user message
     with st.chat_message("user"):
         st.write(user_input)
 
@@ -207,18 +182,20 @@ if user_input:
             context = df.to_string() if not df.empty else "No data"
 
             prompt = f"""
-You are analyzing structured asset data.
+You are an intelligent asset assistant.
 
-IMPORTANT RULES:
+IMPORTANT:
+- Maintain conversation context
+- Use previous questions if relevant
 - Do NOT assume duplicates
-- Do NOT infer multiple assets unless clearly different
-- Only count distinct assets
-- Answer strictly based on given data
+- Only refer to dataset
+- Answer clearly
 
 Dataset:
 {context[:4000]}
 
-Question: {user_input}
+User Question:
+{user_input}
 """
 
             bot_reply = call_llm(prompt)
@@ -226,5 +203,18 @@ Question: {user_input}
     else:
         bot_reply = "⚠️ No data available. Upload PDFs first."
 
+    # ================= SAVE CHAT =================
+    st.session_state.chat_history.append(
+        {"role": "USER", "message": user_input}
+    )
+
+    st.session_state.chat_history.append(
+        {"role": "CHATBOT", "message": str(bot_reply)}
+    )
+
+    # Limit memory (avoid token overflow)
+    st.session_state.chat_history = st.session_state.chat_history[-10:]
+
+    # Show bot response
     with st.chat_message("assistant"):
         st.write(bot_reply)
